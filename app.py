@@ -4,7 +4,7 @@ import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
 import os
-import calendar # 用于处理月份名称
+import calendar
 
 # --- 1. 基础配置 ---
 st.set_page_config(
@@ -52,6 +52,41 @@ def calculate_bollinger(df, window=20, std_dev=2):
     upper = mid + (std * std_dev)
     lower = mid - (std * std_dev)
     return upper, mid, lower
+
+# --- 策略解释文案字典 ---
+STRATEGY_INFO = {
+    "双均线 (Dual MA)": """
+    **📝 核心逻辑：** 趋势跟踪策略。
+    * **买入信号 (Entry)：** 当【短期均线】上穿【长期均线】时（金叉），认为趋势向上，买入。
+    * **卖出信号 (Exit)：** 当【短期均线】下穿【长期均线】时（死叉），认为趋势结束，卖出。
+    * **适用场景：** 有明显单边趋势的牛市或熊市。震荡市容易反复止损（被“打脸”）。
+    """,
+    "MACD 趋势 (MACD Trend)": """
+    **📝 核心逻辑：** 经典的趋势指标策略。
+    * **买入信号 (Entry)：** 当 DIF 线（快线）上穿 DEA 线（慢线）时，形成 MACD 金叉，买入。
+    * **卖出信号 (Exit)：** 当 DIF 线下穿 DEA 线时，形成 MACD 死叉，卖出。
+    * **特点：** 相比普通均线，MACD 对价格变化的反应稍快，且包含动量信息。
+    """,
+    "动量突破 (Momentum)": """
+    **📝 核心逻辑：** 强者恒强（追涨杀跌）。
+    * **计算方式：** (今日收盘价 - N天前收盘价) / N天前收盘价。
+    * **买入信号 (Entry)：** 当过去 N 天的涨幅超过设定的阈值（例如 2%）时，全仓追入。
+    * **卖出信号 (Exit)：** 当动量消失（今日价格低于 N 天前）时卖出。
+    * **适用场景：** 大牛市主升浪。
+    """,
+    "RSI 反转 (RSI Reversion)": """
+    **📝 核心逻辑：** 均值回归（物极必反）。
+    * **买入信号 (Entry)：** RSI < 买入阈值（通常30），代表市场**超卖**（恐慌过度），博反弹。
+    * **卖出信号 (Exit)：** RSI > 卖出阈值（通常70），代表市场**超买**（贪婪过度），落袋为安。
+    * **适用场景：** 震荡市、箱体整理行情。
+    """,
+    "布林带回归 (Bollinger)": """
+    **📝 核心逻辑：** 利用统计学标准差捕捉价格异常。
+    * **买入信号 (Entry)：** 价格跌破【布林下轨】，认为跌过头了，大概率回归中枢，买入。
+    * **卖出信号 (Exit)：** 价格突破【布林上轨】，认为涨过头了，卖出。
+    * **适用场景：** 震荡行情。
+    """
+}
 
 # --- 策略引擎 ---
 def run_strategy_engine(df_origin, strategy_type, params, initial_cash):
@@ -138,7 +173,7 @@ def run_strategy_engine(df_origin, strategy_type, params, initial_cash):
     df['benchmark_asset'] = initial_cash * (df['close'] / first_price)
     
     final_asset = total_assets[-1]
-    final_benchmark = df['benchmark_asset'].iloc[-1] 
+    final_benchmark = df['benchmark_asset'].iloc[-1]
     
     ret = (final_asset - initial_cash) / initial_cash
     bench_ret = (final_benchmark - initial_cash) / initial_cash
@@ -188,108 +223,112 @@ with st.sidebar:
 # --- 4. 主界面 ---
 if raw_df is not None:
     st.title(f"📊 量化工作台: {selected_file}")
-    
-    st.caption(f"Developed by **Yahui Zhang** | MyQuant Pro v11.0")
+    st.caption(f"Developed by **Yahui Zhang** | MyQuant Pro v12.0")
 
-    tab1, tab2, tab3 = st.tabs(["🔍 市场体检", "⚔️ 策略 vs 基准", "🤖 参数优化"])
+    tab1, tab2, tab3 = st.tabs(["🔍 市场体检", "⚔️ 策略回测 (详细)", "🤖 参数优化"])
     
-    # === Tab 1: 市场体检 (升级版) ===
+    # === Tab 1: 市场体检 ===
     with tab1:
         st.subheader("1. 基础概况")
-        
-        # 计算核心指标
         roll_max = raw_df['close'].cummax()
         daily_dd = raw_df['close'] / roll_max - 1.0
         max_dd = daily_dd.min()
-        total_days = len(raw_df)
-        
-        # 获取日期区间
         start_date = raw_df.index[0].strftime('%Y-%m-%d')
         end_date = raw_df.index[-1].strftime('%Y-%m-%d')
         
-        # 指标展示 (Layout 调整)
-        k1, k2, k3, k4 = st.columns([1.5, 1, 1, 1]) # 第一列宽一点放日期
+        k1, k2, k3, k4 = st.columns([1.5, 1, 1, 1])
         k1.metric("数据区间", f"{start_date}", delta=f"至 {end_date}", delta_color="off")
         k2.metric("最新收盘", raw_df['close'].iloc[-1])
         k3.metric("区间总涨幅", f"{((raw_df['close'].iloc[-1]/raw_df['close'].iloc[0])-1)*100:.2f}%")
         k4.metric("历史最大回撤", f"{max_dd*100:.2f}%")
         
         st.divider()
-        
-        # A. 全历史走势图
         st.subheader("📈 历史价格走势 (全区间)")
         st.line_chart(raw_df['close'])
         
-        # B. 基础统计总结
         with st.expander("📊 查看基础统计数据 (Basic Statistics)", expanded=True):
-            # 使用 describe() 获取统计信息
             stats = raw_df[['open', 'high', 'low', 'close', 'volume']].describe().T
-            # 格式化一下，只保留2位小数
             st.dataframe(stats.style.format("{:.2f}"))
-            
-            # 补充计算年化波动率
             daily_ret = raw_df['close'].pct_change()
             annual_vol = daily_ret.std() * np.sqrt(252) * 100
-            st.caption(f"💡 补充指标：该标的年化波动率约为 **{annual_vol:.2f}%** (基于日收益率标准差计算)")
+            st.caption(f"💡 补充指标：该标的年化波动率约为 **{annual_vol:.2f}%**")
 
         st.divider()
-        
-        # C. 周期效应 (周历 + 月历)
         st.subheader("📅 周期/日历效应 (Seasonality)")
-        
         col_week, col_month = st.columns(2)
         
-        # 1. 周历效应
         with col_week:
-            st.markdown("**周度效应 (Day of Week)**")
+            st.markdown("**周度效应**")
             df_cal = raw_df.copy()
             df_cal['pct'] = df_cal['close'].pct_change() * 100
             df_cal['weekday_name'] = df_cal.index.day_name()
             df_cal['weekday_idx'] = df_cal.index.dayofweek
-            
             cal_stats = df_cal.groupby(['weekday_idx', 'weekday_name'])['pct'].mean().reset_index()
             cal_stats.sort_values('weekday_idx', inplace=True)
-            
-            fig_week = px.bar(cal_stats, x='weekday_name', y='pct', 
-                              title="周一至周五平均涨跌幅 (%)", 
-                              color='pct', color_continuous_scale='RdBu_r')
+            fig_week = px.bar(cal_stats, x='weekday_name', y='pct', title="周一至周五平均涨跌幅 (%)", color='pct', color_continuous_scale='RdBu_r')
             st.plotly_chart(fig_week, use_container_width=True)
 
-        # 2. 月历效应 (新增)
         with col_month:
-            st.markdown("**月度效应 (Month of Year)**")
+            st.markdown("**月度效应**")
             df_cal['month'] = df_cal.index.month
-            df_cal['month_name'] = df_cal.index.strftime('%b') # Jan, Feb...
-            
-            # 按月份分组统计
+            df_cal['month_name'] = df_cal.index.strftime('%b')
             month_stats = df_cal.groupby('month')['pct'].mean().reset_index()
-            # 映射回英文名用于画图
             month_stats['month_name'] = month_stats['month'].apply(lambda x: calendar.month_abbr[x])
-            
-            fig_month = px.bar(month_stats, x='month_name', y='pct', 
-                               title="1月至12月平均涨跌幅 (%)", 
-                               color='pct', color_continuous_scale='RdBu_r')
+            fig_month = px.bar(month_stats, x='month_name', y='pct', title="1月至12月平均涨跌幅 (%)", color='pct', color_continuous_scale='RdBu_r')
             st.plotly_chart(fig_month, use_container_width=True)
-            st.caption("注：统计该月份历史上平均是涨还是跌")
 
-    # === Tab 2 ===
+    # === Tab 2: 策略回测 (增强版) ===
     with tab2:
-        st.subheader(f"🚀 策略表现 vs 买入持有 ({strategy_mode})")
-        final_asset, final_bench, ret, bench_ret, trades, df_res = run_strategy_engine(raw_df, strategy_mode, params, initial_cash)
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("策略收益率", f"{ret*100:.2f}%", f"¥{final_asset - initial_cash:,.0f}")
-        m2.metric("基准(买入持有)", f"{bench_ret*100:.2f}%", f"¥{final_bench - initial_cash:,.0f}")
-        alpha = ret - bench_ret
-        m3.metric("超额收益 (Alpha)", f"{alpha*100:.2f}%")
-        trade_count = len([t for t in trades if t[1]!='Buy'])
-        m4.metric("交易次数", trade_count)
+        # 1. 策略说明区 (New Section)
+        with st.expander(f"📖 策略原理解读：{strategy_mode}", expanded=True):
+            st.markdown(STRATEGY_INFO.get(strategy_mode, "暂无描述"))
+
+        st.divider()
+        st.subheader(f"🚀 回测结果分析")
         
-        st.subheader("📈 资金曲线对比")
+        # 运行回测
+        final_asset, final_bench, ret, bench_ret, trades, df_res = run_strategy_engine(raw_df, strategy_mode, params, initial_cash)
+        
+        # 计算高级指标
+        # 1. 策略最大回撤
+        strat_roll_max = df_res['total_asset'].cummax()
+        strat_daily_dd = df_res['total_asset'] / strat_roll_max - 1.0
+        strat_max_dd = strat_daily_dd.min()
+        
+        # 2. 胜率 & 盈亏比
+        trade_count = len([t for t in trades if t[1]!='Buy'])
+        win_rate = 0
+        wl_ratio = 0
+        if trade_count > 0:
+            wins = [t[3] for t in trades if t[3] > 0] # 盈利单
+            losses = [t[3] for t in trades if t[3] <= 0] # 亏损单
+            
+            win_count = len(wins)
+            win_rate = (win_count / trade_count) * 100
+            
+            avg_win = np.mean(wins) if wins else 0
+            avg_loss = np.abs(np.mean(losses)) if losses else 0
+            
+            # 避免除以零
+            if avg_loss > 0:
+                wl_ratio = avg_win / avg_loss
+            else:
+                wl_ratio = 999 # 无亏损，无穷大
+        
+        # 展示 5 大核心指标
+        c1, c2, c3, c4, c5 = st.columns(5)
+        c1.metric("策略收益率", f"{ret*100:.2f}%", f"超额: {(ret-bench_ret)*100:.2f}%")
+        c2.metric("最大回撤 (MaxDD)", f"{strat_max_dd*100:.2f}%", help="策略历史上从最高点跌下来的最大幅度，越小越稳。")
+        c3.metric("胜率 (Win Rate)", f"{win_rate:.1f}%", help="赚钱交易次数 / 总交易次数")
+        c4.metric("盈亏比 (P/L Ratio)", f"{wl_ratio:.2f}", help="平均赚的钱 / 平均亏的钱。通常 > 1.5 才算好策略。")
+        c5.metric("交易次数", trade_count)
+        
+        st.subheader("📈 资金曲线对比 (策略 vs 基准)")
         chart_data = df_res[['total_asset', 'benchmark_asset']].copy()
         chart_data.columns = ['我的策略 (Strategy)', '基准指数 (Benchmark)']
         st.line_chart(chart_data)
         
-        st.subheader("🔍 买卖点详情")
+        st.subheader("🔍 交易详情复盘")
         plot_df = df_res.tail(250)
         fig = go.Figure()
         fig.add_trace(go.Candlestick(x=plot_df.index, open=plot_df['open'], high=plot_df['high'], low=plot_df['low'], close=plot_df['close'], name='K线'))
@@ -303,7 +342,7 @@ if raw_df is not None:
         fig.update_layout(height=500, xaxis_title="日期", yaxis_title="价格")
         st.plotly_chart(fig, use_container_width=True)
 
-    # === Tab 3 ===
+    # === Tab 3: 参数优化 ===
     with tab3:
         st.header("🤖 网格搜索 (Grid Search)")
         st.info("寻找收益率最高的止损/止盈组合")
@@ -342,7 +381,7 @@ if raw_df is not None:
             fig_map.update_layout(title="收益率热力图", xaxis_title="止盈 (%)", yaxis_title="止损 (%)")
             st.plotly_chart(fig_map, use_container_width=True)
 
-# --- 5. 页脚署名 (Footer) ---
+# --- 5. 页脚署名 ---
 st.divider()
 st.markdown(
     """
