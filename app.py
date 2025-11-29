@@ -4,6 +4,7 @@ import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
 import os
+import calendar # 用于处理月份名称
 
 # --- 1. 基础配置 ---
 st.set_page_config(
@@ -132,13 +133,12 @@ def run_strategy_engine(df_origin, strategy_type, params, initial_cash):
         
         total_assets.append(cash + shares * price)
     
-    # === 修复点：确保变量名一致 ===
     df['total_asset'] = total_assets
     first_price = df['close'].iloc[0]
     df['benchmark_asset'] = initial_cash * (df['close'] / first_price)
     
     final_asset = total_assets[-1]
-    final_benchmark = df['benchmark_asset'].iloc[-1] # 修复：统一变量名为 final_benchmark
+    final_benchmark = df['benchmark_asset'].iloc[-1] 
     
     ret = (final_asset - initial_cash) / initial_cash
     bench_ret = (final_benchmark - initial_cash) / initial_cash
@@ -189,32 +189,88 @@ with st.sidebar:
 if raw_df is not None:
     st.title(f"📊 量化工作台: {selected_file}")
     
-    # 顶部添加作者信息
-    st.caption(f"Developed by **Yahui Zhang** | MyQuant Pro v10.1")
+    st.caption(f"Developed by **Yahui Zhang** | MyQuant Pro v11.0")
 
     tab1, tab2, tab3 = st.tabs(["🔍 市场体检", "⚔️ 策略 vs 基准", "🤖 参数优化"])
     
-    # === Tab 1 ===
+    # === Tab 1: 市场体检 (升级版) ===
     with tab1:
-        st.subheader("1. 市场性格分析")
+        st.subheader("1. 基础概况")
+        
+        # 计算核心指标
         roll_max = raw_df['close'].cummax()
         daily_dd = raw_df['close'] / roll_max - 1.0
         max_dd = daily_dd.min()
-        k1, k2, k3, k4 = st.columns(4)
-        k1.metric("总交易天数", len(raw_df))
-        k2.metric("当前价格", raw_df['close'].iloc[-1])
+        total_days = len(raw_df)
+        
+        # 获取日期区间
+        start_date = raw_df.index[0].strftime('%Y-%m-%d')
+        end_date = raw_df.index[-1].strftime('%Y-%m-%d')
+        
+        # 指标展示 (Layout 调整)
+        k1, k2, k3, k4 = st.columns([1.5, 1, 1, 1]) # 第一列宽一点放日期
+        k1.metric("数据区间", f"{start_date}", delta=f"至 {end_date}", delta_color="off")
+        k2.metric("最新收盘", raw_df['close'].iloc[-1])
         k3.metric("区间总涨幅", f"{((raw_df['close'].iloc[-1]/raw_df['close'].iloc[0])-1)*100:.2f}%")
         k4.metric("历史最大回撤", f"{max_dd*100:.2f}%")
+        
         st.divider()
-        st.subheader("📅 日历效应")
-        df_cal = raw_df.copy()
-        df_cal['pct'] = df_cal['close'].pct_change() * 100
-        df_cal['weekday_name'] = df_cal.index.day_name()
-        df_cal['weekday_idx'] = df_cal.index.dayofweek
-        cal_stats = df_cal.groupby(['weekday_idx', 'weekday_name'])['pct'].mean().reset_index()
-        cal_stats.sort_values('weekday_idx', inplace=True)
-        fig_cal = px.bar(cal_stats, x='weekday_name', y='pct', title="周一至周五平均涨跌幅 (%)", color='pct', color_continuous_scale='RdBu_r')
-        st.plotly_chart(fig_cal, use_container_width=True)
+        
+        # A. 全历史走势图
+        st.subheader("📈 历史价格走势 (全区间)")
+        st.line_chart(raw_df['close'])
+        
+        # B. 基础统计总结
+        with st.expander("📊 查看基础统计数据 (Basic Statistics)", expanded=True):
+            # 使用 describe() 获取统计信息
+            stats = raw_df[['open', 'high', 'low', 'close', 'volume']].describe().T
+            # 格式化一下，只保留2位小数
+            st.dataframe(stats.style.format("{:.2f}"))
+            
+            # 补充计算年化波动率
+            daily_ret = raw_df['close'].pct_change()
+            annual_vol = daily_ret.std() * np.sqrt(252) * 100
+            st.caption(f"💡 补充指标：该标的年化波动率约为 **{annual_vol:.2f}%** (基于日收益率标准差计算)")
+
+        st.divider()
+        
+        # C. 周期效应 (周历 + 月历)
+        st.subheader("📅 周期/日历效应 (Seasonality)")
+        
+        col_week, col_month = st.columns(2)
+        
+        # 1. 周历效应
+        with col_week:
+            st.markdown("**周度效应 (Day of Week)**")
+            df_cal = raw_df.copy()
+            df_cal['pct'] = df_cal['close'].pct_change() * 100
+            df_cal['weekday_name'] = df_cal.index.day_name()
+            df_cal['weekday_idx'] = df_cal.index.dayofweek
+            
+            cal_stats = df_cal.groupby(['weekday_idx', 'weekday_name'])['pct'].mean().reset_index()
+            cal_stats.sort_values('weekday_idx', inplace=True)
+            
+            fig_week = px.bar(cal_stats, x='weekday_name', y='pct', 
+                              title="周一至周五平均涨跌幅 (%)", 
+                              color='pct', color_continuous_scale='RdBu_r')
+            st.plotly_chart(fig_week, use_container_width=True)
+
+        # 2. 月历效应 (新增)
+        with col_month:
+            st.markdown("**月度效应 (Month of Year)**")
+            df_cal['month'] = df_cal.index.month
+            df_cal['month_name'] = df_cal.index.strftime('%b') # Jan, Feb...
+            
+            # 按月份分组统计
+            month_stats = df_cal.groupby('month')['pct'].mean().reset_index()
+            # 映射回英文名用于画图
+            month_stats['month_name'] = month_stats['month'].apply(lambda x: calendar.month_abbr[x])
+            
+            fig_month = px.bar(month_stats, x='month_name', y='pct', 
+                               title="1月至12月平均涨跌幅 (%)", 
+                               color='pct', color_continuous_scale='RdBu_r')
+            st.plotly_chart(fig_month, use_container_width=True)
+            st.caption("注：统计该月份历史上平均是涨还是跌")
 
     # === Tab 2 ===
     with tab2:
